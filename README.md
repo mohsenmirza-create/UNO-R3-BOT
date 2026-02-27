@@ -1,26 +1,18 @@
-Elegoo programing project.
-This is project to learn robotics programing in c++ using the elegoo robot. 
-The goal was to make the robot move on its own and react to its environment using sensors.
+PROJECT OVERVIEW:
+Code base for ELEGOO R3 UNO robot (by Mohsen Mirza and Mohib Awan), coded with C++ in Arduino IDE.
 
-WHAT WE BUILT
- 
-Pre-Programmed Routes
-We programmed the robot to follow set paths using timed motor movements like moving forward, turning, and stopping.
+STRUCTURE:
+-Past Projects (individual mini projects built during given lecture time)
+-Functions (individual sects of code with delibrate functiontionality, packaged for easy reuse)
+-Project Development (main project folder where projects are developed, a basic essentials file by Eric Rapos (contains motor pins, servo and gyro functions, etc...) is available, as well as a project file containing a basic project structure for easy development. 
 
-Line Following
+HARDWARE: 
+The R3 comes with a set of motors (for wheels), servos, and two sensors (gyro and ultrasonic).
 
-We used infrared sensors to detect a line on the ground.
-The robot can:
+-Wheels have a tendancy to shift from place after repated use, causing the movement of the robot to become slanted. Long term fix is to tighten the screws of the motors. Quick method would be to manually move the wheels by hand into the correct position. Re
 
-Stay on the line, Correct itself if it drifts,Turn at corners
+-ultrasonic sensor has issues with consistently reading the correct light levels. For example the sensor is placed on an area that has a light level of 50, it will momentarily output 300 even though the reading should be 50. A fix for this is creating a special case where the robot discards the outlier reading so it behaves as expected.
 
-Obstacle Detection
+INSTRUCTIONS:
+-Open a terminal (Git Bash, PowerShell) and type "git clone https://github.com/mohsenmirza-create/UNO-R3-BOT.git" 
 
-We used an ultrasonic sensor to detect objects in front of the robot.
-When it sees an obstacle, it stops, Turns to avoid it, Continues moving, Smart Behavior
-The robot changes how it moves based on sensor readings. It can follow a line, stop at walls, and avoid obstacles automatically.
-
-
-What We Learned
-
-How to program using Arduino, How sensors collect data, How to control motors, How to debug and improve code, How to make a robot react to its environment
