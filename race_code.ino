@@ -113,13 +113,17 @@ void stopMotors() {
 }
 
 // ================= WHITE LINE FUNTIONALITY =================
-bool StopWhiteLine() {
+bool handleWhiteLine() {
 
 
   //read all line sensors
   int leftVal = analogRead(LINE_L);
   int centerVal = analogRead(LINE_C);
   int rightVal = analogRead(LINE_R);
+
+  bool leftWhite = (leftVal < WHITE_THRESHOLD);
+  bool centerWhite = (centerVal < WHITE_THRESHOLD);
+  bool rightWhite = (rightVal < WHITE_THRESHOLD);
 
   //prints light level in serial monitor
   Serial.print(leftVal);
@@ -128,28 +132,27 @@ bool StopWhiteLine() {
   Serial.print("  ");
   Serial.println(rightVal);
   
-  bool leftWhite = (leftVal < WHITE_THRESHOLD);
-  bool centerWhite = (centerVal < WHITE_THRESHOLD);
-  bool rightWhite = (rightVal < WHITE_THRESHOLD);
-  //if all sensors see white turn 90 degrees
+  //if all sensors see white stop and turn
   if (leftWhite && centerWhite && rightWhite) {
     stopMotors();
     delay(200);
     turnToAngle(90);
     return true;
   }
-
+  //Only left and right sees white
   if (centerWhite && !leftWhite && !rightWhite) {
     driveForward(SPEED_FORWARD);
     return true;
   }
 
-  if (leftWhite && !rightWhite) {
+  // Only left sees white
+  if (leftWhite && !centerWhite && !rightWhite) { // added !centerwhite
     turnLeft(70);
     return true;
   }
-
-  if (rightWhite && !leftWhite) {
+  
+   // Only right sees white
+  if (rightWhite && !centerWhite && !leftWhite) { // added !centerwhite
     turnRight(70);
     return true;
   }
