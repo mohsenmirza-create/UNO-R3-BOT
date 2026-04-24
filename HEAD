@@ -1,0 +1,412 @@
+#include <Wire.h>
+#include <FastLED.h>
+#include <Servo.h>
+
+// ====== PIN CONSTANT VALUES ======
+
+#define NUM_LEDS 2
+#define PIN_RBGLED 4
+#define PWR_R 5
+#define PWR_L 6
+#define MTR_R 8
+#define MTR_L 7
+#define SERVO 10
+#define MTR_ENABLE 3
+#define US_OUT 13
+#define US_IN 12
+#define LINE_L A2
+#define LINE_C A1
+#define LINE_R A0
+#define BUTTON 2
+#define GYRO 0x68
+#define TURN_TOLERANCE 5
+
+// ====== PROGRAM CONSTANTS ======
+#define SPEED_NORMAL 55
+#define SPEED_TURN 60
+#define WALL_DISTANCE 5
+#define SCAN_LEFT_ANGLE 0
+#define SCAN_RIGHT_ANGLE 200
+#define SCAN_CENTER_ANGLE 93
+#define SPEED_BALANCE_RIGHT -2
+
+// ====== MODE SWITCHING ======
+enum Mode { WALL_MODE, LINE_MODE };
+Mode currentMode = WALL_MODE;
+
+#define WHITE_THRESHOLD 110
+#define BLACK_THRESHOLD 700
+
+// ====== PROGRAM VARIABLES ======
+int16_t gyroZ;
+float gyroZOffset = 0;
+float currentAngle = 0;
+unsigned long lastTime = 0;
+CRGB leds[NUM_LEDS];
+Servo scanServo;
+
+bool leftBlocked = false;
+bool rightBlocked = false;
+
+void turnByAngle(float targetAngle);
+
+// =========================================================
+// SETUP
+// =========================================================
+
+void setup() {
+
+  FastLED.addLeds<NEOPIXEL, PIN_RBGLED>(leds, NUM_LEDS);
+  FastLED.setBrightness(50);
+
+  pinMode(PWR_R, OUTPUT);
+  pinMode(PWR_L, OUTPUT);
+  pinMode(MTR_L, OUTPUT);
+  pinMode(MTR_R, OUTPUT);
+  pinMode(MTR_ENABLE, OUTPUT);
+
+  pinMode(US_OUT, OUTPUT);
+  pinMode(US_IN, INPUT);
+
+  pinMode(BUTTON, INPUT_PULLUP);
+
+  pinMode(LINE_L, INPUT);
+  pinMode(LINE_C, INPUT);
+  pinMode(LINE_R, INPUT);
+
+  digitalWrite(MTR_ENABLE, HIGH);
+
+  Serial.begin(9600);
+
+  scanServo.attach(SERVO);
+  centerServo();
+
+  while (digitalRead(BUTTON) == HIGH);
+
+  delay(500);
+
+  if (!setupGyro()) {
+    ledOn(CRGB::Red);
+    while (true);
+  }
+
+  calibrateGyro();
+}
+
+// =========================================================
+// MODE SWITCHING
+// =========================================================
+
+void loop() {
+
+  int L = analogRead(LINE_L);
+  int C = analogRead(LINE_C);
+  int R = analogRead(LINE_R);
+
+  // ===== SWITCH TO LINE MODE IF WHITE DETECTED =====
+  if (L < WHITE_THRESHOLD || C < WHITE_THRESHOLD || R < WHITE_THRESHOLD) {
+    currentMode = LINE_MODE;
+  }
+
+  // ===== SWITCH BACK TO WALL MODE IF BLACK DETECTED =====
+  if (L > BLACK_THRESHOLD && C > BLACK_THRESHOLD && R > BLACK_THRESHOLD) {
+    currentMode = WALL_MODE;
+  }
+
+  // ===== EXECUTE CURRENT MODE =====
+  if (currentMode == LINE_MODE) {
+    lineFollow();
+    return;
+  }
+
+  // ===== WALL MODE =====
+  updateGyroAngle();
+  int front = getDistance();
+
+  if (front > 0 && front <= WALL_DISTANCE) {
+    avoidWall();
+  } else {
+    ledOn(CRGB::Green);
+    driveForward(SPEED_NORMAL);
+  }
+}
+
+// =========================================================
+// LINE FOLLOWING MODE 
+// =========================================================
+
+void lineFollow() {
+
+  int leftV   = analogRead(LINE_L);
+  int middleV = analogRead(LINE_C);
+  int rightV  = analogRead(LINE_R);
+
+  // If black detected → return to wall mode
+  if (leftV > BLACK_THRESHOLD && middleV > BLACK_THRESHOLD && rightV > BLACK_THRESHOLD) {
+    currentMode = WALL_MODE;
+    stopMotors();
+    delay(150);
+    return;
+  }
+
+  // go straight
+  if (middleV < 600 && leftV < 600 && rightV < 600) {
+    driveForward(50);
+  }
+
+  // turn left
+  else if (leftV > 600 && middleV < 600 && rightV < 600) {
+    turnLeftRaw(50);
+  }
+
+  // turn right
+  else if (rightV > 600 && middleV < 600 && leftV < 600) {
+    turnRightRaw(50);
+  }
+
+  // stop
+  else if (leftV > 600 && middleV > 600 && rightV > 600) {
+    stopMotors();
+  }
+}
+
+
+// =========================================================
+// LED FUNCTIONS
+// =========================================================
+
+void ledOn(CRGB color) {
+  leds[0] = color;
+  FastLED.show();
+}
+
+void ledOff() {
+  leds[0] = CRGB::Black;
+  FastLED.show();
+}
+
+// =========================================================
+// SERVO FUNCTIONS
+// =========================================================
+
+void setServoAngle(int angle) {
+  static int lastAngle = -1;
+  angle = constrain(angle, 0, 180);
+  if (angle != lastAngle) {
+    scanServo.write(angle);
+    delay(15);
+    lastAngle = angle;
+  }
+}
+
+void centerServo() {
+  setServoAngle(SCAN_CENTER_ANGLE);
+}
+
+// =========================================================
+// GYRO FUNCTIONS 
+// =========================================================
+
+bool setupGyro() {
+  Wire.begin();
+  Wire.beginTransmission(GYRO);
+  Wire.write(0x6B);
+  Wire.write(0);
+  byte error = Wire.endTransmission();
+  if (error != 0) return false;
+
+  Wire.beginTransmission(GYRO);
+  Wire.write(0x1B);
+  Wire.write(0x00);
+  Wire.endTransmission();
+
+  lastTime = millis();
+  return true;
+}
+
+void calibrateGyro() {
+  delay(500);
+  long sum = 0;
+  int samples = 100;
+
+  for (int i = 0; i < samples; i++) {
+    Wire.beginTransmission(GYRO);
+    Wire.write(0x47);
+    Wire.endTransmission(false);
+    Wire.requestFrom(GYRO, 2, true);
+
+    int16_t gz = Wire.read() << 8 | Wire.read();
+    sum += gz;
+    delay(10);
+  }
+
+  gyroZOffset = sum / samples;
+  currentAngle = 0;
+}
+
+int16_t readGyroZ() {
+  Wire.beginTransmission(GYRO);
+  Wire.write(0x47);
+  Wire.endTransmission(false);
+  Wire.requestFrom(GYRO, 2, true);
+  return (Wire.read() << 8 | Wire.read());
+}
+
+void updateGyroAngle() {
+  unsigned long now = millis();
+  float dt = (now - lastTime) / 1000.0;
+  lastTime = now;
+
+  gyroZ = readGyroZ();
+  float gyroRate = -((gyroZ - gyroZOffset) / 131.0);
+  currentAngle += gyroRate * dt;
+
+  if (currentAngle > 180) currentAngle -= 360;
+  if (currentAngle < -180) currentAngle += 360;
+}
+
+void resetAngle() {
+  currentAngle = 0;
+}
+
+float getAngle() {
+  return currentAngle;
+}
+
+// =========================================================
+// ULTRASONIC FUNCTIONS 
+// =========================================================
+
+int getDistance() {
+  int validReading = 0;
+  int attempts = 0;
+
+  while (validReading == 0 && attempts < 3) {
+    if (attempts > 0) delay(60);
+
+    digitalWrite(US_OUT, LOW);
+    delayMicroseconds(2);
+    digitalWrite(US_OUT, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(US_OUT, LOW);
+
+    long duration = pulseIn(US_IN, HIGH, 30000);
+    int distance = duration * 0.034 / 2;
+
+    if (duration > 0 && distance <= 200) {
+      validReading = distance;
+    }
+
+    attempts++;
+  }
+
+  return validReading;
+}
+
+// =========================================================
+// MOTOR FUNCTIONS
+// =========================================================
+
+void driveForward(int speed) {
+  digitalWrite(MTR_L, HIGH);
+  digitalWrite(MTR_R, HIGH);
+
+  int leftSpeed  = speed;
+  int rightSpeed = speed + SPEED_BALANCE_RIGHT;
+
+  leftSpeed  = constrain(leftSpeed, 0, 255);
+  rightSpeed = constrain(rightSpeed, 0, 255);
+
+  analogWrite(PWR_L, leftSpeed);
+  analogWrite(PWR_R, rightSpeed);
+}
+
+void stopMotors() {
+  analogWrite(PWR_L, 0);
+  analogWrite(PWR_R, 0);
+}
+
+void turnLeftRaw(int speed) {
+  digitalWrite(MTR_L, LOW);
+  digitalWrite(MTR_R, HIGH);
+  analogWrite(PWR_L, speed);
+  analogWrite(PWR_R, speed);
+}
+
+void turnRightRaw(int speed) {
+  digitalWrite(MTR_L, HIGH);
+  digitalWrite(MTR_R, LOW);
+  analogWrite(PWR_L, speed);
+  analogWrite(PWR_R, speed);
+}
+
+// =========================================================
+// WALL AVOIDANCE
+// =========================================================
+
+int scanDirection(int angle) {
+  setServoAngle(angle);
+  delay(250);
+  return getDistance();
+}
+
+void avoidWall() {
+  stopMotors();
+  ledOn(CRGB::Red);
+
+  int leftDist = scanDirection(SCAN_LEFT_ANGLE);
+  int rightDist = scanDirection(SCAN_RIGHT_ANGLE);
+
+  centerServo();
+  delay(200);
+
+  leftBlocked = (leftDist < 25);
+  rightBlocked = (rightDist < 25);
+
+  if (leftBlocked && !rightBlocked) {
+    turnByAngle(-90);
+  }
+  else if (rightBlocked && !leftBlocked) {
+    turnByAngle(90);
+  }
+  else {
+    int diff = abs(leftDist - rightDist);
+
+    if (diff < 10) {
+      turnByAngle(90);
+    }
+    else if (leftDist > rightDist) {
+      turnByAngle(90);
+    }
+    else {
+      turnByAngle(-90);
+    }
+  }
+}
+
+// =========================================================
+// TURN BY ANGLE
+// =========================================================
+
+void turnByAngle(float targetAngle) {
+  ledOn(CRGB::Blue);
+  resetAngle();
+  delay(10);
+
+  if (targetAngle > 0) {
+    turnLeftRaw(SPEED_TURN);
+    while (abs(getAngle() - targetAngle) > TURN_TOLERANCE) {
+      updateGyroAngle();
+      delay(5);
+    }
+  } else {
+    turnRightRaw(SPEED_TURN);
+    while (abs(getAngle() - targetAngle) > TURN_TOLERANCE) {
+      updateGyroAngle();
+      delay(5);
+    }
+  }
+
+  stopMotors();
+  delay(200);
+}
